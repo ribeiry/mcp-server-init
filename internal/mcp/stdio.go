@@ -30,6 +30,7 @@ func NewFileSystemClient(ctx context.Context) (*StdioClient, error) {
 		ctx,
 		"npx",
 		"@modelcontextprotocol/server-filesystem",
+		".",
 	)
 
 	stdin, err := cmd.StdinPipe()
@@ -70,6 +71,8 @@ func (c *StdioClient) initialize() error {
 		ID:      c.next(),
 		Method:  "initialize",
 		Params: map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
 			"clientInfo": map[string]string{
 				"name":    "mcp-server-init",
 				"version": "0.1.0",
@@ -83,7 +86,7 @@ func (c *StdioClient) initialize() error {
 	if !c.stdout.Scan() {
 		return errors.New("no response to initialize")
 	}
-
+	log.Printf("received: %s", c.stdout.Text())
 	var resp Response
 
 	if err := json.Unmarshal(c.stdout.Bytes(), &resp); err != nil {
@@ -111,7 +114,16 @@ func (c *StdioClient) initialize() error {
 		Method:  "initialized",
 	}
 
-	return c.send(initReq)
+	if err := c.send(initReq); err != nil {
+		return err
+	}
+
+	//consumir possivel notificacoes do server
+	if c.stdout.Scan() {
+		log.Printf("post-init message: %s", c.stdout.Text())
+
+	}
+	return nil
 
 }
 
@@ -193,7 +205,7 @@ func (c *StdioClient) send(req Request) error {
 	defer c.mu.Unlock()
 
 	b, err := json.Marshal(req)
-
+	log.Printf("sending: %s", string(b))
 	if err != nil {
 		return err
 	}
