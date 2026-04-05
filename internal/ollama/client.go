@@ -153,8 +153,8 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message) (st
 // ListModels chama a API /api/tags do Ollama
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	req, err := http.NewRequestWithContext(
-		ctx, 
-		"GET", 
+		ctx,
+		"GET",
 		c.baseURL+"/api/tags",
 	)
 
@@ -179,7 +179,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	var result := make([]string, 0, len(listResp.Models))
+	var result = make([]string, 0, len(listResp.Models))
 
 	for _, m := range listResp.Models {
 		result = append(result, m.Name)
