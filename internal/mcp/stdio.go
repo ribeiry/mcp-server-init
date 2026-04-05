@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 type StdioClient struct {
@@ -34,20 +35,17 @@ func NewFileSystemClient(ctx context.Context) (*StdioClient, error) {
 	)
 
 	stdin, err := cmd.StdinPipe()
-
 	if err != nil {
-		return nil, err
-
+		return nil, &ConnectionError{Op: "get stdin pipe", Err: err}
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
-
+		return nil, &ConnectionError{Op: "get stdout pipe", Err: err}
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, &ConnectionError{Op: "start command", Err: err}
 	}
 
 	c := &StdioClient{
@@ -58,6 +56,7 @@ func NewFileSystemClient(ctx context.Context) (*StdioClient, error) {
 	}
 
 	if err := c.initialize(); err != nil {
+		c.forceKill()
 		return nil, err
 	}
 
@@ -65,7 +64,6 @@ func NewFileSystemClient(ctx context.Context) (*StdioClient, error) {
 }
 
 func (c *StdioClient) initialize() error {
-
 	req := Request{
 		JSONRPC: "2.0",
 		ID:      c.next(),
@@ -79,32 +77,40 @@ func (c *StdioClient) initialize() error {
 			},
 		},
 	}
+
 	if err := c.send(req); err != nil {
-		return err
+		return &ConnectionError{Op: "send initialize", Err: err}
 	}
 
 	if !c.stdout.Scan() {
-		return errors.New("no response to initialize")
+		if err := c.stdout.Err(); err != nil {
+			return &ConnectionError{Op: "read initialize response", Err: err}
+		}
+		return &ProtocolError{Op: "initialize", Message: "no response from server"}
 	}
-	log.Printf("received: %s", c.stdout.Text())
-	var resp Response
 
-	if err := json.Unmarshal(c.stdout.Bytes(), &resp); err != nil {
-		return err
+	raw := c.stdout.Bytes()
+	log.Printf("received: %s", raw)
+
+	var resp Response
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return &ProtocolError{Op: "parse initialize", Message: err.Error()}
 	}
 
 	if resp.Error != nil {
-		return fmt.Errorf("initialize error : %s ", resp.Error.Message)
+		return &ProtocolError{Op: "initialize", Message: resp.Error.Message, Code: resp.Error.Code}
 	}
 
-	var initiResult InitializeResult
-
-	if err := json.Unmarshal(resp.Result, &initiResult); err != nil {
-		return err
+	if len(resp.Result) == 0 {
+		return &ProtocolError{Op: "initialize", Message: "empty result"}
 	}
 
-	for name := range initiResult.Capabilities.Tools {
+	var initResult InitializeResult
+	if err := json.Unmarshal(resp.Result, &initResult); err != nil {
+		return &ProtocolError{Op: "parse initialize result", Message: err.Error()}
+	}
 
+	for name := range initResult.Capabilities.Tools {
 		log.Printf("discovered tool: %s", name)
 	}
 
@@ -115,20 +121,20 @@ func (c *StdioClient) initialize() error {
 	}
 
 	if err := c.send(initReq); err != nil {
-		return err
+		return &ConnectionError{Op: "send initialized", Err: err}
 	}
 
-	//consumir possivel notificacoes do server
+	// consumir possiveis notificacoes do server
 	if c.stdout.Scan() {
 		log.Printf("post-init message: %s", c.stdout.Text())
-
+	} else if err := c.stdout.Err(); err != nil {
+		log.Printf("warning: error reading post-init notification: %v", err)
 	}
-	return nil
 
+	return nil
 }
 
 func (c *StdioClient) ReadFile(ctx context.Context, path string) (string, error) {
-
 	var resp struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -140,11 +146,11 @@ func (c *StdioClient) ReadFile(ctx context.Context, path string) (string, error)
 		"path": path,
 	}, &resp)
 	if err != nil {
-		return "", err
+		return "", &ToolError{Name: "read_file", Err: err}
 	}
 
 	if len(resp.Content) == 0 {
-		return "", errors.New("empty file")
+		return "", &ProtocolError{Op: "read_file", Message: "empty content"}
 	}
 
 	return resp.Content[0].Text, nil
@@ -156,6 +162,10 @@ func (c *StdioClient) Call(
 	args any,
 	result any,
 ) error {
+	if ctx.Err() != nil {
+		return &ConnectionError{Op: "call " + tool, Err: ctx.Err()}
+	}
+
 	req := Request{
 		JSONRPC: "2.0",
 		ID:      c.next(),
@@ -166,49 +176,47 @@ func (c *StdioClient) Call(
 		},
 	}
 
-	//	var resp struct {
-	//		Result InitializeResult `json:"result"`
-	//	}
-
-	err := c.send(req)
-
-	if err != nil {
-		fmt.Errorf("mcp error: %s", err.Error())
-		return err
+	if err := c.send(req); err != nil {
+		return &ConnectionError{Op: "send " + tool, Err: err}
 	}
 
 	if !c.stdout.Scan() {
-		return errors.New("No response from MCP Server")
+		if err := c.stdout.Err(); err != nil {
+			return &ConnectionError{Op: "read " + tool + " response", Err: err}
+		}
+		return &ProtocolError{Op: "call " + tool, Message: "no response from server"}
 	}
 
 	var rpcResp Response
-
 	if err := json.Unmarshal(c.stdout.Bytes(), &rpcResp); err != nil {
-		return err
+		return &ProtocolError{Op: "parse " + tool + " response", Message: err.Error()}
 	}
 
 	if rpcResp.Error != nil {
-		return fmt.Errorf("mcp error: %s", rpcResp.Error)
+		return &ToolError{Name: tool, Err: &ProtocolError{Op: "execute", Message: rpcResp.Error.Message, Code: rpcResp.Error.Code}}
 	}
 
 	if result == nil {
 		return nil
 	}
-	return json.Unmarshal(rpcResp.Result, result)
 
+	if err := json.Unmarshal(rpcResp.Result, result); err != nil {
+		return &ProtocolError{Op: "parse " + tool + " result", Message: err.Error()}
+	}
+
+	return nil
 }
 
 func (c *StdioClient) send(req Request) error {
-
 	c.mu.Lock()
-
 	defer c.mu.Unlock()
 
 	b, err := json.Marshal(req)
-	log.Printf("sending: %s", string(b))
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal request: %w", err)
 	}
+
+	log.Printf("sending: %s", b)
 
 	if _, err := c.stdin.Write(append(b, '\n')); err != nil {
 		return err
@@ -224,10 +232,45 @@ func (c *StdioClient) next() int {
 }
 
 func (c *StdioClient) Close() error {
+	return c.terminate()
+}
+
+func (c *StdioClient) terminate() error {
+	if c.cmd.Process == nil {
+		return ErrServerClosed
+	}
+
+	// tenta graceful shutdown primeiro
+	err := c.cmd.Process.Signal(os.Interrupt)
+	if err != nil {
+		return c.forceKill()
+	}
+
+	// aguarda processo terminar
+	done := make(chan error, 1)
+	go func() {
+		done <- c.cmd.Wait()
+	}()
+
+	select {
+	case <-time.After(5 * time.Second):
+		return c.forceKill()
+	case err := <-done:
+		return err
+	}
+}
+
+func (c *StdioClient) forceKill() error {
+	if c.cmd.Process == nil {
+		return ErrServerClosed
+	}
 	return c.cmd.Process.Kill()
 }
 
 func (c *StdioClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if ctx.Err() != nil {
+		return nil, &ConnectionError{Op: "list tools", Err: ctx.Err()}
+	}
 
 	req := Request{
 		JSONRPC: "2.0",
@@ -236,11 +279,14 @@ func (c *StdioClient) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 
 	if err := c.send(req); err != nil {
-		return nil, err
+		return nil, &ConnectionError{Op: "send tools/list", Err: err}
 	}
 
 	if !c.stdout.Scan() {
-		return nil, errors.New("no response from MCP Server")
+		if err := c.stdout.Err(); err != nil {
+			return nil, &ConnectionError{Op: "read tools/list response", Err: err}
+		}
+		return nil, &ProtocolError{Op: "tools/list", Message: "no response from server"}
 	}
 
 	var resp struct {
@@ -251,10 +297,10 @@ func (c *StdioClient) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 
 	if err := json.Unmarshal(c.stdout.Bytes(), &resp); err != nil {
-		return nil, err
+		return nil, &ProtocolError{Op: "parse tools/list", Message: err.Error()}
 	}
+
 	log.Printf("raw mcp response: %s", c.stdout.Text())
 
 	return resp.Result.Tools, nil
-
 }
