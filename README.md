@@ -22,19 +22,26 @@ Este projeto é um **lab de estudos** para aprender e experimentar a implementa�
 ```
 .
 ├── cmd/
-│   └── app/
-│       └── main.go           # Ponto de entrada
+│   ├── app/
+│   │   └── main.go              # Cliente MCP exemplo
+│   └── ollama-server/
+│       └── main.go              # Servidor MCP-Ollama (em desenvolvimento)
 ├── internal/
-│   └── mcp/
-│       ├── client.go         # Interface Client
-│       ├── errors.go         # Tipos de erro personalizados
-│       ├── protocol.go       # Estruturas JSON-RPC
-│       ├── stdio.go          # Implementação StdioClient
-│       ├── errors_test.go    # Testes de erros
-│       └── stdio_test.go     # Testes do cliente
+│   ├── mcp/
+│   │   ├── client.go            # Interface Client
+│   │   ├── errors.go            # Tipos de erro personalizados
+│   │   ├── errors_test.go       # Testes de erros (6 testes)
+│   │   ├── protocol.go          # Estruturas JSON-RPC
+│   │   ├── stdio.go             # Implementação StdioClient
+│   │   └── stdio_test.go        # Testes do cliente (20 testes)
+│   └── ollama/
+│       └── client.go            # Cliente HTTP API Ollama
 ├── go.mod
-└── README.md
+├── README.md
+└── CLAUDE.md
 ```
+
+> **Nota:** Em Go, os testes (`*_test.go`) ficam no mesmo diretório que o código testado, não em pasta separada. Isso permite testar funções privadas e facilita navegação.
 
 ## Tipos de Erro
 
@@ -71,8 +78,22 @@ content, err := client.ReadFile(ctx, "/path/to/file")
 ## Testes
 
 ```bash
+# Rodar todos os testes
+go test ./... -v
+
+# Rodar testes do pacote MCP
 go test ./internal/mcp/... -v
+
+# Rodar com detecção de race conditions
+go test ./... -race
 ```
+
+### Cobertura de Testes
+
+| Pacote | Arquivos de Teste | Testes |
+|--------|-------------------|--------|
+| `internal/mcp` | `errors_test.go`, `stdio_test.go` | 26 testes |
+| `internal/ollama` | (em desenvolvimento) | - |
 
 ## Aprendizados
 
@@ -81,6 +102,7 @@ go test ./internal/mcp/... -v
 - Graceful shutdown de processos
 - Pattern de erros wrapping com `errors.As` e `errors.Is`
 - Testes unitários com mocks de I/O
+- Cliente HTTP para API Ollama (Generate, Chat, ListModels)
 
 ## Recursos
 
