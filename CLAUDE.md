@@ -8,15 +8,26 @@ Cliente MCP (Model Context Protocol) em Go que se comunica com servidores via st
 ### Arquitetura
 
 ```
-cmd/app/main.go          → Ponto de entrada, handler de erros
-internal/mcp/
-  client.go              → Interface Client (contrato)
-  protocol.go            → Estruturas JSON-RPC (Request, Response, RPCError)
-  stdio.go               → StdioClient (implementação principal)
-  errors.go              → Tipos de erro personalizados
-  errors_test.go         → Testes de erros
-  stdio_test.go          → Testes do cliente
+cmd/
+  app/
+    main.go              → Cliente MCP exemplo (filesystem)
+  ollama-server/
+    main.go              → Servidor MCP-Ollama (em desenvolvimento)
+
+internal/
+  mcp/
+    client.go            → Interface Client (contrato)
+    protocol.go          → Estruturas JSON-RPC (Request, Response, RPCError)
+    stdio.go             → StdioClient (implementação principal)
+    errors.go            → Tipos de erro personalizados
+    errors_test.go       → Testes de erros (6 testes)
+    stdio_test.go        → Testes do cliente (20 testes)
+  
+  ollama/
+    client.go            → Cliente HTTP para API Ollama
 ```
+
+> **Nota:** Em Go, testes ficam no mesmo pacote que o código testado (sufixo `_test.go`), não em diretório separado.
 
 ### Componentes Principais
 
@@ -33,11 +44,16 @@ internal/mcp/
 1. `initialize` → negocia protocolo e capacidades
 2. `initialized` → confirma conexão estabelecida
 
-#### 4. Métodos Públicos
+#### 4. Métodos Públicos (MCP Cliente)
 - `ListTools(ctx)` → lista ferramentas disponíveis
 - `ReadFile(ctx, path)` → lê arquivo via ferramenta
 - `Call(ctx, tool, args, result)` → chama ferramenta genérica
 - `Close()` → graceful shutdown
+
+#### 5. Cliente Ollama (`internal/ollama`)
+- `Generate(ctx, model, prompt, system)` → completions
+- `Chat(ctx, model, messages)` → conversa com histórico
+- `ListModels(ctx)` → lista modelos disponíveis
 
 ### Tratamento de Erros
 
@@ -56,6 +72,26 @@ if errors.As(err, &connErr) { ... }
 ### Requisitos
 - Go 1.23.2+
 - Node.js com npx (servidores MCP)
+- Ollama rodando localmente (para servidor MCP-Ollama)
+
+### Status por Componente
+
+| Componente | Status | Testes |
+|------------|--------|--------|
+| MCP Cliente (stdio) | ✅ Completo | 26 testes |
+| Tratamento de Erros | ✅ Completo | Coberto |
+| Ollama Cliente HTTP | ✅ Completo | Pendente |
+| MCP Servidor (Ollama) | 🚧 Em desenvolvimento | - |
+
+### Comandos Úteis
+```bash
+go test ./... -v          # Rodar testes com verbose
+go test ./... -race       # Detectar race conditions
+go build ./...            # Build completo
+go mod tidy               # Limpar dependências
+go fmt ./...              # Formatizar código
+go vet ./...              # Análise estática
+```
 
 ---
 
